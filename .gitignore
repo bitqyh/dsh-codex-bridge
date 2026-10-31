@@ -1,0 +1,14 @@
+# 依赖
+node_modules/
+
+# 打包产物
+*.tgz
+package-lock.json
+pnpm-lock.yaml
+
+# 测试临时
+__pycache__/
+*.pyc
+
+# 系统
+.DS_Store
