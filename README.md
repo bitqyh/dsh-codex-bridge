@@ -134,17 +134,21 @@ dsh-codex-bridge/
 ├── bin/cli.mjs       安装/诊断命令
 ├── assets/hooks/     7 个 hook 脚本
 ├── assets/tools/     存档/扫描/验收工具
-└── test-plugin.mjs   11 项离线测试
+├── tests/            回归测试（54+19+8 项）
+└── test-plugin.mjs   11 项插件逻辑测试
 ```
 
 ## 测试
 
 ```bash
-node test-plugin.mjs
+node test-plugin.mjs          # 11 项：插件逻辑
+python3 tests/batch1-tests.py # 54 项：存档语义 + session 选择
+python3 tests/batch2-tests.py # 19 项：验收工具 fixture
+python3 tests/batch3-tests.py #  8 项：中断恢复扫描
 ```
 
-覆盖：注册事件、只注入可操作项、活跃会话不提示、去重、限速、脚本缺失静默、
-开关、downstream 非 enter 时不注入。
+插件逻辑测试覆盖：注册事件、只注入可操作项、活跃会话不提示、去重、限速、
+脚本缺失静默、开关、downstream 非 enter 时不注入。
 
 ## 边界
 
