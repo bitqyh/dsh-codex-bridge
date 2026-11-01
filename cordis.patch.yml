@@ -1,0 +1,13 @@
+# @bitqyh/dsh-codex-bridge 的 bundle patch。
+#
+# 只插入 **UI 入口**（`@bitqyh/dsh-codex-bridge/ui` → src/ui-server.js + client）。
+# 事件扫描插件（`@bitqyh/dsh-codex-bridge` → src/index.js）**默认不插入**：
+# 它会按限速扫描日志并注入中断提示，属于可选的辅助能力，
+# 想要的人在自己 profile patch 里按文档手动添加即可。
+#
+# `cliPath` 由 src/ui-server.js 用 import.meta.url 解析为包内 bin/cli.mjs，
+# 这里不需要硬编码任何本机路径。
+
+- insert:
+    - id: dsh-codex-bridge-ui
+      name: '@bitqyh/dsh-codex-bridge/ui'
