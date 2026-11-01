@@ -225,6 +225,7 @@ dsh-codex-bridge/
 ## 测试
 
 ```bash
+npm install                           # 先装 peer 依赖（@deepseek-ai/dsh-llm）
 npm test                              # 全部 188 项
 node test-plugin.mjs                  # 11 项：插件逻辑
 node tests/ui-tests.mjs               # 16 项：交接按钮前端
@@ -234,6 +235,12 @@ python3 tests/batch3-tests.py         #  8 项：中断恢复扫描
 python3 tests/batch4-resume-tests.py  # 28 项：resume 恢复上下文
 python3 tests/project-scope-tests.py  # 52 项：项目归属判定（含歧义）
 ```
+
+> 从 GitHub 克隆后直接 `npm test` 会报 `Cannot find package '@deepseek-ai/dsh-llm'`
+> ——它声明在 `peerDependencies`（装进 DSH profile 时由宿主提供）。
+> 只在仓库里跑测试需要先 `npm install`，`devDependencies` 会把它装上。
+> 已作为插件装进 profile 的开发副本不需要，因为它会沿目录树解析到 profile 的
+> `node_modules`。
 
 插件逻辑测试覆盖：注册事件、只注入可操作项、活跃会话不提示、去重、限速、
 脚本缺失静默、开关、downstream 非 enter 时不注入。
