@@ -61,7 +61,14 @@ function defaultScriptPath() {
   return join(PKG_ROOT, "assets", "tools", "recover-interrupted.py");
 }
 
-export const Config = {
+/**
+ * 配置默认值。
+ *
+ * `resolveConfig` 会调 `Config['~standard'].validate(config)`——**不是**读这些键本身。
+ * 所以默认值必须由 `validate` 合并进去，只写在这里不会生效：cordis 传进来的原始
+ * config 是 patch 里那一小块，缺的键不会自动补。
+ */
+const CONFIG_DEFAULTS = Object.freeze({
   /** 扫描脚本路径。留空则自动解析（已安装位置 → 包内自带）。 */
   scriptPath: "",
   /** 限速窗口（秒）。同一窗口内最多扫一次。 */
@@ -72,6 +79,50 @@ export const Config = {
   maxReported: 3,
   /** 总开关。 */
   enabled: true,
+});
+
+/** 非负有限数，否则用默认值。手改配置写成字符串/NaN 不该让启动失败。 */
+function nonNegative(value, fallback) {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/**
+ * 插件配置 schema。
+ *
+ * 暴露给 cordis 的是 `~standard.validate`（Standard Schema v1）：
+ * `resolveConfig` 直接调它，**没有 `~standard` 就抛 TypeError**，
+ * 插件在启动阶段就挂掉（曾经的真实故障：`Cannot read properties of undefined
+ * (reading 'validate')`）。validate 永不抛错——一个坏配置不该让整个应用起不来，
+ * 读不懂的值一律回退默认值。
+ */
+export const Config = {
+  ...CONFIG_DEFAULTS,
+  type: "object",
+  meta: { default: {} },
+  toJSON() {
+    return { ...CONFIG_DEFAULTS };
+  },
+  "~standard": {
+    version: 1,
+    vendor: "dsh-codex-bridge",
+    validate(value) {
+      const src = value !== null && typeof value === "object" ? value : {};
+      const scriptPath =
+        typeof src.scriptPath === "string" ? src.scriptPath : CONFIG_DEFAULTS.scriptPath;
+      const sinceHours = nonNegative(src.sinceHours, CONFIG_DEFAULTS.sinceHours);
+      return {
+        value: {
+          scriptPath,
+          throttleSeconds: nonNegative(src.throttleSeconds, CONFIG_DEFAULTS.throttleSeconds),
+          // 0 小时等于「扫全部」，没有意义，退回默认窗口
+          sinceHours: sinceHours > 0 ? sinceHours : CONFIG_DEFAULTS.sinceHours,
+          maxReported: Math.max(1, Math.floor(nonNegative(src.maxReported, CONFIG_DEFAULTS.maxReported))),
+          enabled: typeof src.enabled === "boolean" ? src.enabled : CONFIG_DEFAULTS.enabled,
+        },
+      };
+    },
+  },
 };
 
 const STATE_FILE = () => join(tmpdir(), "dsh-ai-memory-recovery-last-scan.json");

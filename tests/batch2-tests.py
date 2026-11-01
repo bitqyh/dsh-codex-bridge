@@ -215,8 +215,10 @@ def main() -> int:
               rc != 0 and "incomplete" in out and "未完整验证" in out, out[-200:])
 
         # 11) 位置参数原样保留（旧版 set -- 覆盖它）
+        # 用临时目录下的路径当位置参数，不写死某台机器上的绝对路径。
+        pos_arg = str(Path(d) / "default-workspace")
         rc, out = run(["--skip-network", "--hooks-dir", str(d), "--db", str(db),
-                       "/Users/qyh/Documents/deepseek-harness/default-workspace"])
+                       pos_arg])
         check("位置参数未被覆盖", "default-workspace" in out, out[:200])
 
         # 12) 只读：不给写权限也能跑（库文件设为只读）

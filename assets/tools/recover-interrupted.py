@@ -79,7 +79,9 @@ def scan_codex(since_us: int) -> list[dict]:
         if mtime_us < since_us:
             continue
         meta = ck.first_meta(path) or {}
-        native = meta.get("session_id") or meta.get("id") or path.stem
+        # payload.id 是**该 thread 自己的**原生 id；session_id 是主会话关联 id
+        # （子智能体也沿用）。必须 id 优先，否则子会话会被并进主 native。
+        native = meta.get("id") or meta.get("session_id") or path.stem
         out.append({
             "agent": "codex",
             "native_id": native,

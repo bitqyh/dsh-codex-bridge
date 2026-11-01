@@ -12,3 +12,6 @@ __pycache__/
 
 # 系统
 .DS_Store
+
+# 本机运维记录（含本机绝对路径与备份位置，不进公开仓库）
+ACTIVATION.md

@@ -24,7 +24,7 @@
  * - 失败不破坏既有配置
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, chmodSync,
 } from "node:fs";
@@ -237,6 +237,31 @@ async function cmdSetupCodex(log = console.log) {
   return 0;
 }
 
+/** resume：转发给 assets/tools/resume.py（纯只读）。 */
+async function cmdResume(log = console.log) {
+  const py = join(PKG_ROOT, "assets", "tools", "resume.py");
+  if (!existsSync(py)) {
+    console.error(`✗ 找不到 ${py}`);
+    return 1;
+  }
+  // 透传所有参数给 python（--session/--from-agent/--cwd/--json/--db/--*-root）
+  const pass = argv.slice(1);
+  const r = spawnSync("python3", [py, ...pass], { stdio: "inherit" });
+  return r.status ?? 1;
+}
+
+async function cmdSessions(log = console.log) {
+  const py = join(PKG_ROOT, "assets", "tools", "resume.py");
+  if (!existsSync(py)) {
+    console.error(`✗ 找不到 ${py}`);
+    return 1;
+  }
+  // 同一解析器，只加 --list-sessions 置位；其余参数原样透传
+  const pass = ["--list-sessions", ...argv.slice(1)];
+  const r = spawnSync("python3", [py, ...pass], { stdio: "inherit" });
+  return r.status ?? 1;
+}
+
 async function cmdDoctor(log = console.log) {
   log("dsh-codex-bridge doctor — 只读检查");
   log("");
@@ -297,6 +322,8 @@ function cmdHelp(log = console.log) {
   log("用法:");
   log("  dsh-codex-bridge setup           安装 DSH 侧（先看计划，加 --yes 执行）");
   log("  dsh-codex-bridge setup-codex     安装 Codex 侧");
+  log("  dsh-codex-bridge resume          构建可接续聊天的恢复上下文（只读）");
+  log("  dsh-codex-bridge sessions        列出可接续聊天（只读，可 --all-cwds）");
   log("  dsh-codex-bridge doctor          只读检查两侧状态");
   log("  dsh-codex-bridge paths           打印相关路径");
   log("");
@@ -307,6 +334,8 @@ function cmdHelp(log = console.log) {
 }
 
 const table = {
+  resume: cmdResume,
+  sessions: cmdSessions,
   setup: cmdSetup,
   "setup-codex": cmdSetupCodex,
   doctor: cmdDoctor,

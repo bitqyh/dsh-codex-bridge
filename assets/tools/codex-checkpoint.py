@@ -72,11 +72,20 @@ def pick_rollout(cwd: str | None, session: str | None) -> Path:
         hits = [p for p in candidates if session in p.name]
         if hits:
             return hits[0]
-        # 文件名不带时，退一步查 session_meta 的 session_id / id
-        # （Codex 的线程 id 和 rollout 文件 id 可以不同）
+        # 文件名不带时，退一步查 session_meta。
+        # **id 优先**：payload.id 是该 thread 自己的原生 id；
+        # session_id 是主会话关联 id，子智能体也沿用，拿它匹配会误选关联子 log。
+        # 所以先只按 id 精确匹配。
         for p in candidates:
             meta = first_meta(p) or {}
-            if session in (meta.get("id"), meta.get("session_id")):
+            if meta.get("id") == session:
+                return p
+        # session_id 只作**兼容回退**：仅当该 log 自己**没有 id** 时才允许用它匹配。
+        # 若 log 有 id 却不是目标，说明它是别的 thread（例如关联的子智能体），
+        # 不能借来冒充目标——否则主 log 缺失时会静默选中子 log。
+        for p in candidates:
+            meta = first_meta(p) or {}
+            if not meta.get("id") and meta.get("session_id") == session:
                 return p
         sys.exit(f"找不到含 {session} 的 rollout（文件名和 session_meta 都不匹配）")
 

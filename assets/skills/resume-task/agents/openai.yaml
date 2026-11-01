@@ -1,0 +1,7 @@
+interface:
+  display_name: "接续任务"
+  short_description: "接续已有聊天上下文，含本轮收尾后的后续需求与中断恢复"
+  default_prompt: "使用 $resume-task 接续已有聊天的任务上下文：先取回现场，核验后再继续。"
+
+policy:
+  allow_implicit_invocation: true
