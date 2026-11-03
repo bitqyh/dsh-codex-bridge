@@ -143,7 +143,41 @@ dsh-codex-bridge resume --from-agent codex --session <完整native-id>
 
 ## 前置条件
 
-**分两种，按你要用的能力看：**
+### 运行时依赖一览
+
+**这个包不是「一条命令装完就什么都不用管」。** 它复用你机器上已有的 `python3`
+读原生日志，装之前先对一下表：
+
+| 依赖 | 谁需要 | 缺了会怎样 |
+|---|---|---|
+| **Node.js ≥ 20** | 全部 | 插件不加载 |
+| **`python3` ≥ 3.8** | 「交接」列表、`resume`、`doctor` | **列表静默为空**，前端显示「读取失败」；CLI 无输出 |
+| `zstd` | 只读 **DSH 侧**会话时需要 | DSH 侧会话全部读不出，逐个进「已跳过」；Codex 侧不受影响 |
+| **ai-memory 服务** | 采集 / 自动存档 / 中断提示 | 「交接」列表和 `resume` 仍可用（它们不依赖服务） |
+| **Codex**（CLI 或 Desktop） | 读 Codex 会话 | Codex 侧没有可接续聊天 |
+
+自检：
+
+```bash
+node -v          # ≥ 20
+python3 -V       # ≥ 3.8（只用标准库，不需要 pip 装任何东西）
+command -v zstd  # 只读 DSH 侧才需要
+```
+
+`python3` 只用到标准库（`json`/`sqlite3`/`subprocess`/`pathlib` 等），
+**不需要 pip / requirements.txt**。已实测 macOS 自带的 `/usr/bin/python3`（3.9）
+可用；5 个工具脚本在 3.9 下全部编译通过。
+
+> 🪟 **Windows 暂未适配。** 代码里直接 `spawnSync("python3", ...)`，而 Windows
+> 上通常只有 `python` 或 `py`，没有 `python3`。没有做 `process.platform` 分支，
+> 所以 Windows 上「交接」列表会是空的。装之前请确认 `python3` 在 PATH 里，
+> 否则等后续版本。
+
+> ⚠️ **`python3` 是硬依赖，而且缺了不会报错。** 实测：PATH 里没有 `python3` 时
+> CLI 退出码 1、stdout 为空、stderr 也为空，界面只说「读取失败」。
+> 如果你装完发现「交接」列表一直是空的，先 `command -v python3`。
+
+### 按你要用的能力分
 
 **① 采集 / 自动存档 / 普通 handoff** — 需要已安装并运行 ai-memory 服务
 （本包不包含）：
@@ -160,7 +194,9 @@ curl -s http://127.0.0.1:49374/healthz   # → {"status":"ok"}
 - 直接读本机原生日志（Codex `~/.codex/sessions`、DSH sessions 目录）。
 - **没有 ai-memory 数据库也能用**，按原生日志降级构建，正文会标
   「缺 DB 校验」，提醒你现场核验。
-- DSH 日志是 zstd 压缩，需要本机有 `zstd` 命令。
+- **只读 DSH 侧会话时需要 `zstd`**（DSH 日志是 `session.v4.jsonl.zstd`）。
+  没有 zstd 时 DSH 侧会话会全部读不出并逐个进「已跳过」统计，Codex 侧不受影响
+  ——因为 Codex 日志是未压缩的 `.jsonl`。
 - 缺点：DB 侧的时间线/存档信息拿不到，只有日志里写下来的内容。
 
 ## 配置
