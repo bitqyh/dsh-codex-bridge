@@ -6,7 +6,7 @@
  * 不启动 desktop、不发真实请求、不读真实会话正文。
  */
 import assert from 'node:assert'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -70,11 +70,15 @@ const src = readFileSync(join(ROOT, 'src/ui-client.js'), 'utf8')
 function loadClient(host) {
   const React = makeReact()
   let captured = null
+  let loadId = null
   const win = {
     addEventListener: () => {},
     removeEventListener: () => {},
     __ModuleLoader__: {
-      load({ factory }) {
+      load({ id, factory }) {
+        // 记录 factory 注册 id：必须与 package.json 的 manifest name 一致，
+        // 否则宿主 compose 的 graph row（用 manifest name）与 factory 注册名对不上。
+        loadId = id
         const mod = factory((name) => {
           if (name === 'react') return React
           throw new Error(`unexpected require: ${name}`)
@@ -86,7 +90,7 @@ function loadClient(host) {
   // 用 Function 隔离作用域，注入 fake window/document/navigator/fetch
   const fn = new Function('window', 'document', 'navigator', 'fetch', 'Response', 'URLSearchParams', src)
   fn(win, host.document, host.navigator, host.fetch, Response, URLSearchParams)
-  return { mod: captured, React }
+  return { mod: captured, React, loadId: () => loadId }
 }
 
 // ---------- fake host ----------
@@ -102,6 +106,45 @@ function makeHost({ fetchImpl } = {}) {
   const f = fetchImpl || (async () => new Response('{}', { status: 200 }))
   return { document: doc, navigator: nav, fetch: f, styleEls }
 }
+
+// ---------- manifest name / factory id 一致性 ----------
+// 宿主 compose 用 manifest name 作为 graph row 的 packageName，
+// 而 factory 通过 __ModuleLoader__.load({ id }) 注册自己。
+// 两者不一致时，bundle 注册进一个 graph 不认识的 id，按钮不渲染。
+const manifestName = (() => {
+  const pj = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+  return pj.name
+})()
+
+await check('manifest name 是 scoped 包名', async () => {
+  assert.equal(manifestName, '@bitqyh/dsh-codex-bridge')
+})
+
+await check('client factory 注册 id 与 manifest name 一致', async () => {
+  const host = makeHost()
+  const { loadId } = loadClient(host)
+  const id = loadId()
+  assert.ok(id, '应记录到 load id')
+  assert.equal(id, manifestName,
+    `factory id (${id}) 必须等于 manifest name (${manifestName})，否则宿主 graph 对不上`)
+})
+
+await check('客户端 bundle 的 ./client 导出存在且可解析', async () => {
+  const pj = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+  const client = pj.exports && pj.exports['./client']
+  assert.ok(client, 'package.json 必须声明 exports["./client"]')
+  const target = join(ROOT, typeof client === 'string' ? client : client.default)
+  assert.ok(existsSync(target), `./client 指向的文件不存在: ${target}`)
+})
+
+await check('dsh.client 声明完整（platform/immediately/inject）', async () => {
+  const pj = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+  const c = pj.dsh && pj.dsh.client
+  assert.ok(c, 'package.json 必须声明 dsh.client')
+  assert.equal(c.platform, 'web')
+  assert.equal(c.immediately, true)
+  assert.ok(Array.isArray(c.inject) && c.inject.includes('@deepseek-ai/dsh-client-ui-conversation'))
+})
 
 await check('模块可加载并导出 apply', async () => {
   const host = makeHost()

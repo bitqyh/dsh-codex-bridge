@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-codex-bridge',
+  id: '@bitqyh/dsh-codex-bridge',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
