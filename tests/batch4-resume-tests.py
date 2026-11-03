@@ -188,6 +188,139 @@ def test_missing_db(mod) -> None:
               ctx["body"][:200])
 
 
+# ---------------------------------------------------------------- DB 侧一致性
+def _mk_db(path: Path, native: str, *, obs_us=None, auto_us=None,
+           in_db=True, agent_kind="codex", ended_us=None) -> Path:
+    """造一个只含 DB 一致性所需列的最小 ai-memory 库。"""
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE workspaces(id BLOB PRIMARY KEY, name TEXT);
+        CREATE TABLE projects(id BLOB PRIMARY KEY, name TEXT, workspace_id BLOB);
+        CREATE TABLE sessions(id BLOB PRIMARY KEY, agent_kind TEXT, cwd TEXT,
+                              ended_at INTEGER, project_id BLOB, workspace_id BLOB);
+        CREATE TABLE observations(session_id BLOB, created_at INTEGER,
+                                  workspace_id BLOB, project_id BLOB);
+        CREATE TABLE pages(path TEXT, created_at INTEGER, is_latest INTEGER,
+                           project_id BLOB, workspace_id BLOB);
+    """)
+    w, pj = uuid.uuid4().bytes, uuid.uuid4().bytes
+    conn.execute("INSERT INTO workspaces VALUES(?,?)", (w, "default"))
+    conn.execute("INSERT INTO projects VALUES(?,?,?)", (pj, "proj", w))
+    sid = uuid.uuid5(uuid.NAMESPACE_OID, native).bytes if len(native) < 32 else uuid.UUID(native).bytes
+    if in_db:
+        conn.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?)",
+                     (sid, agent_kind, "/tmp/proj", ended_us, pj, w))
+    if obs_us:
+        conn.execute("INSERT INTO observations VALUES(?,?,?,?)", (sid, obs_us, w, pj))
+    if auto_us:
+        conn.execute("INSERT INTO pages VALUES(?,?,?,?,?)",
+                     (f"_autosave/{agent_kind}-{native}.md", auto_us, 1, pj, w))
+    conn.commit()
+    conn.close()
+    return path
+
+
+def _rollout_with_time(tmp: Path, native: str, log_us: int) -> Path:
+    """写一个带**统一时间戳**的 rollout，便于精确控制「日志末尾」。"""
+    from datetime import datetime, timezone
+    ts = datetime.fromtimestamp(log_us / 1e6, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    f = tmp / f"rollout-{native}.jsonl"
+
+    def with_ts(e):
+        return {**e, "timestamp": ts}
+
+    write_rollout(f, {"id": native, "session_id": native, "cwd": "/tmp/proj"},
+                  [with_ts(codex_user("任务")), with_ts(codex_cmd("echo 1"))])
+    return f
+
+
+def test_db_autosave_stale(mod) -> None:
+    """存档明显落后于日志 → 必须点明「按日志重建的才是最新的」。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        now = int(time.time() * 1_000_000)
+        log_us = now - 2 * 3600 * 1_000_000      # 日志末尾 2 小时前
+        old = now - 20 * 3600 * 1_000_000        # 存档 20 小时前
+        native = "01a30000-0000-7000-8000-000000000001"
+        f = _rollout_with_time(tmp, native, log_us)
+        db = _mk_db(tmp / "m.sqlite", native, obs_us=old, auto_us=old)
+        ctx = mod.build_resume(f, native, "/tmp/proj", "default", "proj", db_path=db)
+        body = ctx["body"]
+        check("DB: 存档落后被点出", "存档落后" in body, body[:400])
+        check("DB: 说明按日志重建才最新", "按日志重建" in body, body[:400])
+        check("DB: 观测落后被点出", "观测落后" in body, body[:400])
+
+
+def test_db_autosave_fresh_is_quiet(mod) -> None:
+    """存档跟得上日志 → 不要再抱怨（避免狼来了）。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        now = int(time.time() * 1_000_000)
+        log_us = now - 2 * 3600 * 1_000_000
+        near = log_us - 60 * 1_000_000
+        native = "01a30000-0000-7000-8000-000000000002"
+        f = _rollout_with_time(tmp, native, log_us)
+        db = _mk_db(tmp / "m.sqlite", native, obs_us=near, auto_us=near)
+        ctx = mod.build_resume(f, native, "/tmp/proj", "default", "proj", db_path=db)
+        body = ctx["body"]
+        check("DB: 存档正常时不误报", "存档落后" not in body, body[:400])
+        check("DB: 观测正常时不误报", "观测落后" not in body, body[:400])
+
+
+def test_db_active_session_not_flagged(mod) -> None:
+    """最近仍在活动时，存档落后属本轮未结束，不能说成崩溃。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        now = int(time.time() * 1_000_000)
+        log_us = now - 60 * 1_000_000             # 1 分钟前仍在动
+        old = now - 5 * 3600 * 1_000_000
+        native = "01a30000-0000-7000-8000-000000000003"
+        f = _rollout_with_time(tmp, native, log_us)
+        db = _mk_db(tmp / "m.sqlite", native, obs_us=log_us, auto_us=old)
+        ctx = mod.build_resume(f, native, "/tmp/proj", "default", "proj", db_path=db)
+        body = ctx["body"]
+        # 只看 _db_lines 产出的那几行（以「存档」开头），
+        # 排除既有的「结束判定：…未完成或崩溃」文案
+        db_part = "\n".join(
+            ln for ln in body.splitlines() if ln.startswith("- 存档") or ln.startswith("- ⚠ **存档"))
+        check("DB: 活跃会话不说成崩溃",
+              "额度中断" not in db_part and "崩溃" not in db_part, db_part)
+        check("DB: 点明本轮尚未收尾", "仍在活动" in db_part, db_part)
+
+
+def test_db_no_autosave_page(mod) -> None:
+    """没有存档页时如实说明，而不是静默当成正常。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        now = int(time.time() * 1_000_000)
+        log_us = now - 3600 * 1_000_000
+        native = "01a30000-0000-7000-8000-000000000004"
+        f = _rollout_with_time(tmp, native, log_us)
+        db = _mk_db(tmp / "m.sqlite", native, obs_us=log_us, auto_us=None)
+        ctx = mod.build_resume(f, native, "/tmp/proj", "default", "proj", db_path=db)
+        check("DB: 无存档页被说明", "没有自动存档页" in ctx["body"], ctx["body"][:400])
+
+
+def test_db_ended_at_not_used_for_freshness(mod) -> None:
+    """`ended_at` 与日志末尾无关，**不能**被当成进度新旧依据。
+
+    实测：同一会话 ended_at 与日志末尾可差 ±16 小时、方向不定，
+    所以即便 ended_at 很新也不该改变「存档落后」的判断。
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        now = int(time.time() * 1_000_000)
+        log_us = now - 2 * 3600 * 1_000_000
+        old = now - 20 * 3600 * 1_000_000
+        native = "01a30000-0000-7000-8000-000000000005"
+        f = _rollout_with_time(tmp, native, log_us)
+        # ended_at 很新，但存档仍旧 → 仍应报落后
+        db = _mk_db(tmp / "m.sqlite", native, obs_us=old, auto_us=old, ended_us=now)
+        ctx = mod.build_resume(f, native, "/tmp/proj", "default", "proj", db_path=db)
+        check("DB: ended_at 新也不掩盖存档落后",
+              "存档落后" in ctx["body"], ctx["body"][:400])
+
+
 def test_user_text_and_injection(mod) -> None:
     """真实 HTML 用户输入要保留，system/skill/hook 注入要排除。"""
     with tempfile.TemporaryDirectory() as tmp:
@@ -329,7 +462,11 @@ def main() -> int:
 
     for fn in (test_quota_with_task_complete, test_clean_turn_not_old_quota,
                test_unpaired_tool, test_truncated_tail, test_cross_scope_page,
-               test_missing_db, test_user_text_and_injection, test_no_secret,
+               test_missing_db,
+               test_db_autosave_stale, test_db_autosave_fresh_is_quiet,
+               test_db_active_session_not_flagged, test_db_no_autosave_page,
+               test_db_ended_at_not_used_for_freshness,
+               test_user_text_and_injection, test_no_secret,
                test_unicode_path, test_selection_no_guess, test_no_candidate,
                test_dedup_by_cursor, test_zstd_truncated_prefix, test_cli_injectable):
         try:

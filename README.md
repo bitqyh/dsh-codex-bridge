@@ -192,12 +192,18 @@ curl -s http://127.0.0.1:49374/healthz   # → {"status":"ok"}
 **② `resume` 手动恢复** — **不需要服务运行**：
 
 - 直接读本机原生日志（Codex `~/.codex/sessions`、DSH sessions 目录）。
-- **没有 ai-memory 数据库也能用**，按原生日志降级构建，正文会标
-  「缺 DB 校验」，提醒你现场核验。
+- **没有 ai-memory 数据库也能用**：正文全部由原生日志构建，恢复内容一个字节都不少。
 - **只读 DSH 侧会话时需要 `zstd`**（DSH 日志是 `session.v4.jsonl.zstd`）。
   没有 zstd 时 DSH 侧会话会全部读不出并逐个进「已跳过」统计，Codex 侧不受影响
   ——因为 Codex 日志是未压缩的 `.jsonl`。
-- 缺点：DB 侧的时间线/存档信息拿不到，只有日志里写下来的内容。
+- **有 DB 时会多做三项一致性核对**（这是 DB 唯一的作用，它不是恢复内容的来源）：
+  1. 日志末尾 vs 钩子最后上报 → 钩子是否在丢事件
+  2. 日志末尾 vs 存档时间 → **存档是否落后于真实进度**（超过 90 秒即报，
+     额度中断/崩溃时最容易出现）
+  3. 会话是否在 DB 登记、agent kind 是否一致
+  缺 DB 时这三项跳过，正文开头标一行「缺 DB 校验」。
+- 注意 `ended_at` **不参与**进度新旧判断：它是「钩子捕获到结束的时刻」，
+  与日志末尾实测可差 ±16 小时且方向不定。
 
 ## 配置
 
@@ -254,7 +260,7 @@ dsh-codex-bridge/
 ├── cordis.patch.yml  自带 UI 入口
 ├── assets/hooks/     7 个 hook 脚本
 ├── assets/tools/     存档/扫描/恢复/验收工具
-├── tests/            回归测试（54+19+8+28+52 项）
+├── tests/            回归测试（54+19+8+37+52 项）
 └── test-plugin.mjs   11 项插件逻辑测试
 ```
 
@@ -262,13 +268,13 @@ dsh-codex-bridge/
 
 ```bash
 npm install                           # 先装 peer 依赖（@deepseek-ai/dsh-llm）
-npm test                              # 全部 188 项
+npm test                              # 全部 201 项
 node test-plugin.mjs                  # 11 项：插件逻辑
 node tests/ui-tests.mjs               # 16 项：交接按钮前端
 python3 tests/batch1-tests.py         # 54 项：存档语义 + session 选择
 python3 tests/batch2-tests.py         # 19 项：验收工具 fixture
 python3 tests/batch3-tests.py         #  8 项：中断恢复扫描
-python3 tests/batch4-resume-tests.py  # 28 项：resume 恢复上下文
+python3 tests/batch4-resume-tests.py  # 37 项：resume 恢复上下文 + DB 一致性
 python3 tests/project-scope-tests.py  # 52 项：项目归属判定（含歧义）
 ```
 
@@ -319,7 +325,7 @@ python3 tests/project-scope-tests.py  # 52 项：项目归属判定（含歧义�
 ## 边界
 
 - **不包含 ai-memory 服务本身**。采集、存档、普通 handoff 需要它；
-  `resume` 读原生日志不依赖它，缺 DB 时降级并明确标注。
+  `resume` 读原生日志不依赖它；缺 DB 时只是少做三项一致性核对，不丢恢复内容。
 - **Codex 侧需要重新信任钩子**（信任哈希绑定命令），改完不信任会静默跳过。
   这条只影响采集，不影响 `resume`。
 - **插件只发现和提示中断**，不自动写恢复交接。

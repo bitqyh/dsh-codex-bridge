@@ -1757,7 +1757,15 @@ def open_db_ro(db_path: Path | None = None):
 
 
 def db_context(conn, ws: str, proj: str, agent: str, native: str) -> dict:
-    """按 workspace/project/agent/session 精确取 DB 侧事实。"""
+    """按 workspace/project/agent/session 精确取 DB 侧事实。
+
+    这里取的每一项都**必须**在正文里用上——查了不用等于给后来者错觉，
+    以为 DB 已经参与了判断。当前用途见 `_db_lines`：
+
+    * `session_in_db` / `agent_matches` / `ended_at_us`：登记一致性
+    * `last_obs_us`：与日志末尾比，判断「日志有活动但钩子没收到」
+    * `autosave_us`：与日志末尾比，判断「存档落后于真实进度」
+    """
     if conn is None:
         return {"available": False}
     canon = canonical_id(native)
@@ -1775,7 +1783,7 @@ def db_context(conn, ws: str, proj: str, agent: str, native: str) -> dict:
             info["cwd"] = row[1]
             info["ended_at_us"] = row[2]
             info["agent_matches"] = (row[0] == agent)
-        # 该会话在此 scope 的最后成功工具观测
+        # 该会话在此 scope 的最后一次工具观测（钩子收到的最后证据）
         info["last_obs_us"] = conn.execute(
             """SELECT MAX(created_at) FROM observations
                WHERE session_id = ? AND workspace_id = (SELECT id FROM workspaces WHERE name=?)
@@ -1798,6 +1806,107 @@ def db_context(conn, ws: str, proj: str, agent: str, native: str) -> dict:
 
 
 # ---------------------------------------------------------------- 构建正文
+
+# 存档/观测落后多少才算「可疑」。与 recover-interrupted.py 的 verdict() 同一阈值：
+# 同一份数据在两个入口给出不一致的结论，比给出保守结论更糟。
+STALE_LAG_US = 90 * 1_000_000
+
+# 「最近仍在活动」的判定窗口，同样与 recover-interrupted.py 一致。
+ACTIVE_WINDOW_US = 5 * 60 * 1_000_000
+
+
+def _db_lines(db: dict, agent: str, log_us: int | None, now_us: int | None = None) -> list[str]:
+    """把 DB 侧事实翻成正文里的几行——只写**会影响判断**的内容。
+
+    设计依据（实测，不是推测）：
+    * `ended_at` 是**钩子捕获到会话结束的时刻**，不是内容终止时间。
+      同一会话的 ended_at 与日志最后事件实测可差 ±16 小时、方向不定，
+      所以它**不能**用来判断进度新旧，只用于「登记一致性」。
+    * 真正有意义的是 `last_obs_us` / `autosave_us` 与**日志末尾**的差：
+      - 日志有活动、观测没有 → 钩子在丢事件
+      - 日志有活动、存档没跟上 → 存档落后于真实进度（本插件要解决的核心痛点）
+    """
+    if not db.get("available"):
+        return ["- ⚠ **缺 DB 校验**：未能核对 ai-memory 数据库（仅按原生日志构建）"]
+    if db.get("error"):
+        return [f"- ⚠ DB 查询失败：{db['error']}"]
+
+    out: list[str] = []
+    if not db.get("session_in_db"):
+        out.append("- ⚠ 该会话未在 DB 中登记（钩子可能未捕获）")
+        return out
+    if db.get("agent_matches") is False:
+        out.append(f"- ⚠ DB 里 agent 是 `{db.get('agent_kind')}`，与 `{agent}` 不符")
+
+    # 没有日志末尾时间就没法算落后，不猜
+    if log_us is None:
+        return out
+
+    now = now_us if now_us is not None else int(_now_us())
+    is_active = log_us > now - ACTIVE_WINDOW_US
+
+    obs_us = db.get("last_obs_us") or 0
+    auto_us = db.get("autosave_us") or 0
+
+    # 1) 钩子丢失：日志有活动，但 DB 一条观测都没有 / 明显落后
+    if not obs_us:
+        out.append("- ⚠ DB 里这个会话没有任何工具观测（钩子未收到事件）")
+    else:
+        obs_lag = log_us - obs_us
+        if obs_lag > STALE_LAG_US:
+            out.append(
+                f"- ⚠ **观测落后日志 {_fmt_lag(obs_lag)}**：日志末尾有 "
+                f"{_fmt_ts(log_us)} 的内容，但钩子最后一次上报停在 {_fmt_ts(obs_us)}"
+                " —— 可能钩子未捕获，别只信 DB 里的进度"
+            )
+
+    # 2) 存档落后：本插件要解决的核心一致性问题
+    if not auto_us:
+        out.append("- 该会话没有自动存档页（`_autosave/`），只能按日志重建")
+    else:
+        auto_lag = log_us - auto_us
+        if auto_lag > STALE_LAG_US:
+            if is_active:
+                out.append(
+                    f"- 存档落后日志 {_fmt_lag(auto_lag)}，但会话最近 5 分钟仍在活动"
+                    " —— 本轮尚未收尾，属正常"
+                )
+            else:
+                out.append(
+                    f"- ⚠ **存档落后日志 {_fmt_lag(auto_lag)}**：存档停在 "
+                    f"{_fmt_ts(auto_us)}，日志已到 {_fmt_ts(log_us)} —— "
+                    "很可能该轮没有正常结束（额度中断/崩溃），下面按日志重建的内容才是最新的"
+                )
+        elif is_active:
+            out.append("- 存档与日志末尾接近；会话最近 5 分钟仍在活动")
+    return out
+
+
+def _now_us() -> float:
+    import time
+    return time.time() * 1_000_000
+
+
+def _fmt_lag(us: int) -> str:
+    """把微秒差写成人类可读的粗粒度时长。"""
+    sec = int(us // 1_000_000)
+    if sec < 60:
+        return f"{sec} 秒"
+    if sec < 3600:
+        return f"{sec // 60} 分钟"
+    if sec < 86400:
+        return f"{sec // 3600} 小时"
+    return f"{sec // 86400} 天 {sec % 86400 // 3600} 小时"
+
+
+def _fmt_ts(us: int) -> str:
+    """微秒时间戳 → UTC 可读时刻（与正文其它时间同一口径）。"""
+    from datetime import datetime, timezone
+    try:
+        return datetime.fromtimestamp(us / 1e6, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    except (OverflowError, OSError, ValueError):
+        return "未知时刻"
+
 def build_resume(path, native: str, cwd: str, ws: str, proj: str,
                  db_path: Path | None = None, agent: str | None = None,
                  cwd_unverified: bool = False) -> dict:
@@ -1859,14 +1968,11 @@ def build_resume(path, native: str, cwd: str, ws: str, proj: str,
     lines.append(f"- 结束判定：**{st['outcome']}** —— {st['evidence']}")
     if st["truncated"]:
         lines.append("- ⚠ 日志尾部有截断/损坏行，可能有未记录的事件")
-    if not db.get("available"):
-        lines.append("- ⚠ **缺 DB 校验**：未能核对 ai-memory 数据库（仅按原生日志构建）")
-    elif db.get("error"):
-        lines.append(f"- ⚠ DB 查询失败：{db['error']}")
-    elif not db.get("session_in_db"):
-        lines.append("- ⚠ 该会话未在 DB 中登记（钩子可能未捕获）")
-    elif db.get("agent_matches") is False:
-        lines.append(f"- ⚠ DB 里 agent 是 `{db.get('agent_kind')}`，与 `{agent}` 不符")
+    # 日志末尾时间：DB 侧的一致性判断都以它为基准
+    _log_times = [x for x in (_event_time(e) for e in events) if x is not None]
+    log_us = max(_log_times) if _log_times else None
+    for dl in _db_lines(db, agent, log_us):
+        lines.append(dl)
     lines.append("")
 
     lines.append("## 任务目标（人类原话）")
