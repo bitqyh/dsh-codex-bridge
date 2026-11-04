@@ -141,6 +141,17 @@ dsh-codex-bridge resume --from-agent codex --session <完整native-id>
 导入会话）、`dsh-takeover`（新建会话接管）、`task-passport`（任务状态搬运）的逐条对比
 见 [COMPARISON.md](./COMPARISON.md)。
 
+## 开发与发布
+
+改了代码要发新版本时，完整流程（含 npm scope 组织、token 类型、202 异步落地、
+市场 PR 的几个坑）见 [RELEASE.md](./RELEASE.md)。
+
+```bash
+npm install     # 首次：装 peer 依赖
+npm test        # 201 项
+npm pack --dry-run   # 发版前看清单
+```
+
 ## 前置条件
 
 ### 运行时依赖一览
