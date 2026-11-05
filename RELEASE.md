@@ -375,6 +375,80 @@ grep "id:" src/ui-client.js | head -1
 
 ---
 
+## 七、Git 版本管理约定
+
+### 现行做法
+
+**单分支。** 只有 `main`，所有工作直接提交、提交后立即 push。没有 feature branch，
+也没有走 PR 流程（外部贡献才用 PR，比如市场目录）。
+
+单人维护时开分支只是给自己加步骤。**将来有人一起改就不适用了**，届时改成
+「一功能一分支 + PR 合入」。
+
+**提交粒度：一个逻辑改动一个 commit。** 判断标准是**回滚边界**，不是文件数。
+例：功能实现和发布准备分开提交，因为功能出问题要回滚前者，改名出问题回滚后者。
+
+**提交信息写「为什么」，不写「做了什么」。** diff 能看出改了什么，
+看出「为什么必须这么改」只能靠 message。项目里这类信息密集的提交通常正文几十行，
+把踩到的宿主行为、报错原文、验证方式都记下来。
+
+类型前缀只用四种（项目实际分布）：
+
+| 前缀 | 用途 |
+|---|---|
+| `feat:` | 新功能 |
+| `fix:` | 修缺陷（含回归） |
+| `docs:` | README / CHANGELOG / RELEASE / 注释性文档 |
+| `chore:` | 版本号、元数据、发布准备 |
+
+**发布前状态必须干净。** `git status` 空、测试全过、`npm pack --dry-run` 清单正确，
+然后才 `npm publish`；发布后补 tag + Release。
+
+**不进仓库的东西**写在 `.gitignore`：
+
+```gitignore
+ACTIVATION.md      # 本机运维记录：含绝对路径与备份位置
+repo-backups/      # 本地改动前快照
+node_modules/ *.tgz __pycache__/ *.pyc .DS_Store
+package-lock.json pnpm-lock.yaml
+```
+
+### ⚠️ 这条规则是踩坑换来的：不要随手回滚「未提交改动」
+
+**2026-11-04 的真实事故：**
+
+1. 11-02 有人修好了 `cordis.patch.yml` 的 name 形态（包名 → `./src/ui-server.js`），
+   本机验收通过——**但没 commit**，改动一直躺在工作区。
+2. 11-04 我做别的任务时看到 `git status` 有 3 个未提交文件，
+   判断为「没写完的改动」，`git checkout` 回滚掉。
+3. 那个修复随之消失，我提交了包名形式 → 发布 0.1.0 → **所有人的按钮不渲染**。
+
+`git checkout <file>` 是**不可逆**的：没有 commit、没有 stash，只能靠外部备份找回
+（这次是靠 `~/.dsh/profiles/desktop/handoff-fix-backup-20261102-*/` 和
+`~/Documents/GPToutput/ai-memory跨agent交接/插件加载恢复记录-2026-11-02.md`）。
+
+**三条硬规则：**
+
+1. **回滚前先查来历。** `git diff <file>` 看改了什么，
+   `git log -S '<关键片段>' --oneline` 看这行以前是否存在过。
+   弄清楚「是谁、为什么改的」再动手，不要把它当垃圾。
+2. **用 `git stash` 不用 `git checkout`。** 判断不了就先暂存，
+   `git stash list` / `git stash pop` 都能反悔。
+3. **修完立刻 commit，哪怕标 WIP。** 本次根因不是回滚动作，而是
+   **一个已验证通过的修复在仓库里躺了两天没提交**。
+
+事故复盘写进了 `CHANGELOG.md` 的 0.1.1 一节，预防手段是补了 2 项测试
+（patch name 必须是 pathLike、只允许一个入口 id）——
+把教训变成会失败的测试，比写文档更可靠。
+
+### 版本号与 tag
+
+- 用 `npm version patch|minor|major --no-git-tag-version` 改版本号，
+  然后**手动** commit 和打 tag（不用 npm 自动 tag，便于先跑测试再提交）
+- tag 格式 `vX.Y.Z`，必须是 annotated tag（`git tag -a`）
+- **npm 发布和 git tag 要成对出现**。发完 npm 忘了打 tag 会导致
+  「registry 上有版本，git 里找不到对应提交」
+
 ## 环境参考
 
 首次发布时的环境：npm 11.13.0 / node v24.16.0 / python3 3.14.7（macOS）。
