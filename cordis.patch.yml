@@ -1,13 +1,21 @@
 # @bitqyh/dsh-codex-bridge 的 bundle patch。
 #
-# 只插入 **UI 入口**（`@bitqyh/dsh-codex-bridge/ui` → src/ui-server.js + client）。
-# 事件扫描插件（`@bitqyh/dsh-codex-bridge` → src/index.js）**默认不插入**：
+# 只插入 **UI 入口**（src/ui-server.js + client）。
+# 事件扫描插件（src/index.js）**默认不插入**：
 # 它会按限速扫描日志并注入中断提示，属于可选的辅助能力，
 # 想要的人在自己 profile patch 里按文档手动添加即可。
 #
 # `cliPath` 由 src/ui-server.js 用 import.meta.url 解析为包内 bin/cli.mjs，
 # 这里不需要硬编码任何本机路径。
+#
+# ⚠️ `name` 必须用 **pathLike 形式**（`./` 开头），不能写「包名 + 子路径」
+# （`@bitqyh/dsh-codex-bridge/ui`）：宿主 @deepseek-ai/dsh-client-modules 的
+# exactPackageSpecifier 会拒掉带 `/` 的包名形式，条目被**静默跳过**——
+# 服务端接口一切正常，但界面上的按钮不渲染。`parsePatchList` 会把 `./`
+# 按 **patch 文件所在目录**锚成 file:// URL，所以同一份 patch 装到任何目录
+# 都能解析到各自的 ui-server.js，是可移植的。
+# 详见：~/Documents/GPToutput/ai-memory跨agent交接/插件加载恢复记录-2026-11-02.md
 
 - insert:
     - id: dsh-codex-bridge-ui
-      name: '@bitqyh/dsh-codex-bridge/ui'
+      name: './src/ui-server.js'

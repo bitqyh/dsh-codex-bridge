@@ -545,6 +545,32 @@ await check('缺省 cliPath 用包内默认（不再强制配置）', async () =
   assert.equal(regs.length, 2, '缺省配置应注册两个路由')
 })
 
+await check('cordis.patch.yml 的 UI 入口名用 pathLike 形式（不能用包名+子路径）', async () => {
+  // 宿主 @deepseek-ai/dsh-client-modules 的 exactPackageSpecifier 会拒掉带 "/" 的
+  // 包名形式，条目被**静默跳过**：服务端接口照常 200，但界面按钮不渲染。
+  // parsePatchList 会把 "./" 按 patch 文件所在目录锚成 file:// URL，可移植。
+  // 本机曾因写成 '@bitqyh/dsh-codex-bridge/ui' 导致按钮消失。
+  const patch = readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8')
+  const m = patch.match(/^\s+name:\s*'([^']+)'/m)
+  assert.ok(m, 'cordis.patch.yml 里应有 name 字段')
+  const name = m[1]
+  assert.ok(
+    name.startsWith('./') || name.startsWith('../') || name.startsWith('/') || name.startsWith('file:'),
+    `name 必须是 pathLike 形式，当前是 ${name}（包名+子路径会被宿主静默跳过）`,
+  )
+  assert.ok(!name.includes('@bitqyh/'), `不应写成包名形式：${name}`)
+  // 锚定后必须真的指向本包内的 ui-server.js
+  assert.ok(name.endsWith('ui-server.js'), `应指向 ui-server.js，当前 ${name}`)
+  assert.ok(existsSync(join(ROOT, name)), `锚定路径应存在：${name}`)
+})
+
+await check('cordis.patch.yml 的 id 与 profile 手工条目不冲突（只保留一个入口）', async () => {
+  const patch = readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8')
+  const ids = [...patch.matchAll(/^\s+- id:\s*(\S+)/gm)].map((x) => x[1])
+  assert.equal(ids.length, 1, `包内 patch 只应有一个入口，当前 ${ids.join(',')}`)
+  assert.equal(ids[0], 'dsh-codex-bridge-ui')
+})
+
 const passed = results.filter((r) => r.ok).length
 for (const r of results) if (!r.ok) console.log(`FAIL ${r.label}  [${r.detail}]`)
 console.log(`\n${passed}/${results.length} 通过`)
