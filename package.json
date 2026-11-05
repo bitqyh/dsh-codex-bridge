@@ -1,6 +1,6 @@
 {
   "name": "@bitqyh/dsh-codex-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "在 DSH 输入框下方列出可接续的 Codex 聊天，按具体项目分组，只把恢复内容插入草稿、不自动发送。",
   "type": "module",
   "main": "src/index.js",

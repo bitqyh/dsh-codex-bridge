@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.1 — 2026-11-05
+
+### 修复：0.1.0 装上后「交接」按钮不渲染
+
+`cordis.patch.yml` 的入口名写成了「包名 + 子路径」`@bitqyh/dsh-codex-bridge/ui`，
+而宿主的 `exactPackageSpecifier` 只接受不含 `/` 的包名形式——带 `/` 直接返回
+`undefined`，`locatePkgJson` 随即放弃，条目被**静默跳过**。
+
+症状具有欺骗性：服务端接口一切正常（认证 200、数据完整），只是界面上的按钮
+不出现，重启也无效。
+
+现改为 pathLike 形式 `./src/ui-server.js`。`parsePatchList` 会把 `./` 按
+patch 文件所在目录锚成 `file://` URL，所以同一份 patch 装到任何位置都能解析到
+各自的 `ui-server.js`，不影响可移植性。
+
+### 新增测试
+
+- `cordis.patch.yml` 的 name 必须是 pathLike 且指向 `ui-server.js`，锚定后文件必须存在
+- 包内 patch 只允许一个入口 id（重复会导致 `readOnlyReason=unaddressable`）
+
+这两项此前没有覆盖，是把错误写法「修正」回去却没被发现的原因。
+把 name 改回包名形式，测试立刻失败。
+
 ## 0.1.0 — 2026-11-01
 
 首个对外版本。
