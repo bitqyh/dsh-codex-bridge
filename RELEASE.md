@@ -318,7 +318,54 @@ gh release create vX.Y.Z --title "..." --notes-file /tmp/notes.md
 
 ---
 
-## 五、发完记得
+## 五、插件装了但界面没反应？先查 patch 的 name 形态
+
+**这是本项目踩过的真实故障，症状极具欺骗性：服务端一切正常，按钮就是不出现。**
+
+`cordis.patch.yml` 的 `name` 必须是 **pathLike 形式**：
+
+```yaml
+- insert:
+    - id: dsh-codex-bridge-ui
+      name: './src/ui-server.js'      # ✅ 可移植：按 patch 所在目录锚定
+```
+
+**不能**写成「包名 + 子路径」：
+
+```yaml
+      name: '@bitqyh/dsh-codex-bridge/ui'   # ❌ 被静默跳过
+```
+
+宿主的 `exactPackageSpecifier` 只接受不含 `/` 的包名，带 `/` 直接返回
+`undefined`，`locatePkgJson` 随即 `return`，条目被丢弃且**不报错**。
+`parsePatchList` 会把 `./` 按 patch 文件所在目录转成 `file://` URL，
+所以装到任何目录都能解析到各自的 `ui-server.js`，不影响可移植性。
+
+排查顺序：
+
+```bash
+# 1. 服务端是否正常（正常不代表客户端加载了）
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:60762/api/dsh-codex-bridge/sessions
+# 401 是正常的（需要 owner 认证）；500/404 才是服务端问题
+
+# 2. 包内 patch 的 name 形态
+grep "name:" cordis.patch.yml
+
+# 3. profile 里是否残留重复条目（会导致 readOnlyReason=unaddressable）
+grep -c "id: dsh-codex-bridge-ui" ~/.dsh/profiles/desktop/cordis.patch.yml
+# 应为 0——入口由包内 bundle patch 提供，profile 不能再手工 insert 同 id
+
+# 4. factory id 是否等于 manifest name（scoped 包用全名）
+grep "id:" src/ui-client.js | head -1
+```
+
+改完 patch 后：bundle patch 在**进程启动时**读取，所以要么重启 DSH，
+要么用「解除卡顿」重建页面。只改文件不重建看不到效果。
+
+详细根因与宿主源码定位见本机记录：
+`~/Documents/GPToutput/ai-memory跨agent交接/插件加载恢复记录-2026-11-02.md`
+
+## 六、发完记得
 
 - **删 token**：https://www.npmjs.com/settings/yydsqyh/tokens
 - 确认 `npm view <pkg> version` 是新版本
